@@ -15,5 +15,8 @@
 
 # # RNN Moneymaker
 
-import numpy as np
-print("Edward is a god.")
+import torch
+import torch.optim
+
+
+
