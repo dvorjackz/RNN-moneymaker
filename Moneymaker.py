@@ -16,4 +16,4 @@
 # # RNN Moneymaker
 
 import numpy as np
-print("Edward is poor.")
+print("Edward is a god.")
