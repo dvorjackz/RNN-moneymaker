@@ -21,62 +21,102 @@ import torch
 import time
 import numpy as np
 import matplotlib.pyplot as plt
+import json
+import os
 
+
+root_path = 'scrape/'
 
 # +
-rows = []
-with open('./data/data.csv', newline='') as csvfile:
-    reader = csv.reader(csvfile)
-    fields = next(reader)
+seq = []
+y = []
+window_size = 122
+
+# Only load a third of all stocks because of processing issues
+
+for i, filename in enumerate(os.listdir(root_path + 'data')):
     
-    for row in reader:
-        row = row[1:]
-        row = [float(re.sub(' \$', '', i)) for i in row]
-        rows.append(row)
+    if i % 50 == 0:
+    
+        len_stocks = len(os.listdir(root_path + 'data'))
+        print("Loading stock {}/{} ({})".format(i + 1, len_stocks, filename), end='\r')
+        with open(root_path + 'data/' + filename) as f:
+            if not filename.startswith('.'):
+                data = json.load(f)
 
-raw_data = torch.tensor(rows)
-print(raw_data.shape)
+                temp = []
+                for k, v in data.items():
+                    temp.append(torch.tensor([ float(i[1]) for i in v.items() if i[0] != "5. volume" ]).unsqueeze(0))
+                prices = torch.cat(temp, 0)
+                
+                for i in range(len(prices) - window_size - 1):
+                    seq.append(prices[i:i+window_size].unsqueeze(0))
+                    y.append(prices[i+window_size][3].item()) # predict the closing price
+y = torch.tensor(y).unsqueeze(1)
+X = torch.cat(seq, 0)
+
+print(X.shape)
+print(y.shape)
+
+
+# -
+
+
+torch.save(X, 'X.pt')
+torch.save(y, 'y.pt')
+
+X = torch.load('X.pt')
+y = torch.load('y.pt')
 
 # +
-seq_len = 100
-train_val = []
-for i in range(raw_data.shape[0] - seq_len - 2):
-    train_val.append(rows[i:i+seq_len+1])
-train_val = np.array(train_val)[:,:,:-1]
-means = np.expand_dims(np.mean(train_val, axis=1), axis=1)
-stds = np.expand_dims(np.std(train_val, axis=1), axis=1)
-# stds[stds==0] = 1
+X_mean = torch.mean(X, dim=1).unsqueeze(1)
+X_std = torch.std(X, dim=1).unsqueeze(1)
 
-# normalize sequences
-train_val_norm = (train_val - means) / stds
+X = (X - X_mean) / X_std
+y = (y - X_mean[:,:,3]) / X_std[:,:,3]
+
+print(X.shape)
+print(y.shape)
+plt.plot(X[0])
+print(y)
 
 # +
-N, S, D = train_val_norm.shape
+print("old:")
+print(X.shape)
+print(y.shape)
+
+a = torch.sum(torch.sum(X == X, dim=1), dim=1) != 0
+b = (y == y) != 0
+
+c = a if torch.sum(a) < torch.sum(b) else b
+
+X = X[c]
+y = y[c] # To make y (N, 1) from (N,)
+
+print("new:")
+print(X.shape)
+print(y.shape)
+# -
+
+print(X.shape)
+print(y.shape)
+
+# +
+N, S, D = X.shape
 perm = np.random.permutation(N)
-num_train = int(0.8*N)
+num_train = int(0.99*N)
 num_val = N - num_train
 
-train = torch.tensor(train_val_norm[perm[0:num_train],:,:]).float()
-val = torch.tensor(train_val_norm[perm[num_train:],:,:]).float()
-
-plt.plot(np.transpose(train[:100,:,0]))
-plt.show()
-
-# +
-X_train = train[:, :seq_len, :]
-X_val = val[:, :seq_len, :]
-y_train = train[:, seq_len, :]
-y_val = val[:, seq_len, :]
-
-# only want to predict Open, High, Low, Close, so delete the last column
-y_train = np.delete(y_train, 4, 1)
-y_val = np.delete(y_val, 4, 1)
+X_train = X[perm[0:num_train],:,:]
+y_train = y[perm[0:num_train]]
+X_val = X[perm[num_train:],:,:]
+y_val = y[perm[num_train:]]
+# -
 
 print(X_train.shape)
 print(y_train.shape)
 print(X_val.shape)
 print(y_val.shape)
-# -
 
 import torch.optim
 import torch.nn as nn
@@ -123,13 +163,13 @@ class RNNClassifier(nn.Module):
         return out
 
 
-input_dim = 5
+input_dim = 4
 hidden_dim = 20
-output_dim = 4
+output_dim = 1
 
 model = RNNClassifier(input_dim, hidden_dim, output_dim)
 criterion = nn.MSELoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(model.parameters())
 
 train_accs = []
 val_accs = []
@@ -138,15 +178,21 @@ val_losses = []
 epoch = 0
 
 t0 = time.time()
-num_epochs = 10
+num_epochs = 5
 for ep in range(num_epochs):
     tstart = time.time()
     for i, data in enumerate(loader):
+        print(i, end='\r')
         optimizer.zero_grad()
+#         print("optimizer.zero_grad()")
         outputs = model(data[0])
+#         print("outputs = model(data[0])")
         loss = criterion(outputs, data[1])
+#         print("loss = criterion(outputs, data[1])")
         loss.backward()
+#         print("loss.backward()")
         optimizer.step()
+#         print("optimizer.step()")
         if i%100==0:
             train_losses.append(loss.item())
             pXval = model(X_val)
@@ -168,22 +214,18 @@ for ep in range(num_epochs):
 time_total = time.time() - t0
 print('Total time: {:4.3f}, average time per epoch: {:4.3f}'.format(time_total, time_total / num_epochs))
 
-plt.plot(train_losses)
+torch.save(model, 'model.pt')
+
+t_losses = [i for i in train_losses if i < 4000]
+plt.plot(t_losses)
 plt.plot(val_losses)
 plt.title('loss history')
 plt.xlabel('epoch')
 plt.ylabel('loss')
+plt.yscale('log')
 plt.legend(['train', 'val'])
 
-# +
-# print(y_train[0])
-# plt.plot(X_train[0])
-# print(X_train[0].std())
-
-print(train[0,:seq_len,:].shape)
-pred = model(train[:1, :seq_len,:])
-# pred = ((model(X_train[:5]) + t_mean[:5, :, :4]) * t_std[:5, :, :4]).detach()
-print(pred)
+model.eval()
 
 # +
 # 
