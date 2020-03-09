@@ -19,43 +19,48 @@
 import numpy as np
 import torch
 
-import requests
+import json
 import os
 
 # +
-av_api_key = os.environ.get('av_api_key')
-base_url = "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={}&outputsize=full&apikey={}"
-stock = "MSFT"
-url = base_url.format(stock, av_api_key)
-
-r = requests.get(url) 
-data = r.json()["Time Series (Daily)"]
-
-print(len(data))
-
-# +
 X = []
+y = []
+window_size = 122
 
-for k, v in data.items():
-    row = [ float(i[1]) for i in v.items() ]
-    X.append(row)
+# Only load a third of all stocks because of processing issues
 
-# X[i] = [open, high, low, close, volume]
+for i, filename in enumerate(os.listdir('scrape/data')):
     
+    if i % 3 == 0:
+    
+        len_stocks = len(os.listdir('scrape/data'))
+        print("Loading stock {}/{}".format(i + 1, len_stocks))
+        with open('scrape/final.txt', 'w') as f:
+            with open('scrape/data/' + filename) as f:
+                if not filename.startswith('.'):
+                    print(filename)
+                    prices = []
+                    data = json.load(f)
+
+                    for k, v in data.items():
+                        row = [ float(i[1]) for i in v.items() ]
+                        prices.append(row)
+
+                    for i in range(len(prices) - window_size - 1):
+                        X.append(prices[i:i+window_size])
+                        y.append(prices[i+window_size][3]) # predict the closing price
+
+
+# -
+
+
 X = np.array(X)
+y = np.array(y)
 print(X.shape)
+print(y.shape)
 
 # +
-X_len = X.shape[0]
-window_size = 1000
-X_set, y_set = [], []
-
-for i in range(X_len - window_size - 1):
-    X_set.append(X[i:i+window_size])
-    y_set.append(X[i+window_size][3]) # predict the closing price
-
-X_set, y_set = np.array(X_set), np.array(y_set)
-num_train = X_set.shape[0]
+num_train = X.shape[0]
 
 train_size = int(0.8 * num_train)
 test_size = num_train - train_size
@@ -69,6 +74,3 @@ print("X_train shape: ", X_train.shape)
 print("X_test shape: ", X_test.shape)
 print("y_train shape: ", y_train.shape)
 print("y_test shape: ", y_test.shape)
-# -
-
-

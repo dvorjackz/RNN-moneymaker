@@ -1,0 +1,3 @@
+Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
+Skipped ZXYZ.A and ZNWAA
+File Creation Time: 0306202017:02|||||||
