@@ -8,13 +8,14 @@
 #       format_version: '1.5'
 #       jupytext_version: 1.3.4
 #   kernelspec:
-#     display_name: .venv
+#     display_name: Python 3
 #     language: python
-#     name: .venv
+#     name: python3
 # ---
 
 # # RNN Moneymaker
 
+# +
 import csv
 import re
 import torch
@@ -23,37 +24,57 @@ import numpy as np
 import matplotlib.pyplot as plt
 import json
 import os
+from datetime import datetime
+
+import torch.optim
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
+# -
 
 
-root_path = 'scrape/'
+root_path = 'scrape/data/'
 
 # +
 seq = []
 y = []
+name_and_date = []
 window_size = 122
 
-# Only load a third of all stocks because of processing issues
+all_files = os.listdir(root_path)
 
-for i, filename in enumerate(os.listdir(root_path + 'data')):
+for i, filename in enumerate(all_files):
     
+    # Only load a 1/N of all stocks
     if i % 50 == 0:
     
-        len_stocks = len(os.listdir(root_path + 'data'))
+        len_stocks = len(all_files)
         print("Loading stock {}/{} ({})".format(i + 1, len_stocks, filename), end='\r')
-        with open(root_path + 'data/' + filename) as f:
+        
+        with open(root_path + filename) as f:
             if not filename.startswith('.'):
                 data = json.load(f)
 
-                temp = []
+                temp1 = [] # for prices
+                temp2 = [] # for name and date
+                
                 for k, v in data.items():
-                    temp.append(torch.tensor([ float(i[1]) for i in v.items() if i[0] != "5. volume" ]).unsqueeze(0))
-                prices = torch.cat(temp, 0)
+                    temp1.append(torch.tensor([ float(i[1]) for i in v.items() if i[0] != "5. volume" ]).unsqueeze(0))
+                    temp2.append(k)
+                
+                # reverse so that data is increasing in time
+                temp1.reverse()
+                temp2.reverse()
+                                
+                prices = torch.cat(temp1, 0)
                 
                 for i in range(len(prices) - window_size - 1):
                     seq.append(prices[i:i+window_size].unsqueeze(0))
                     y.append(prices[i+window_size][3].item()) # predict the closing price
-y = torch.tensor(y).unsqueeze(1)
+                    name_and_date.append([filename.split('.')[0], temp2[i + window_size + 1]])
+                    
 X = torch.cat(seq, 0)
+y = torch.tensor(y).unsqueeze(1) # from (N,) to (N,1)
 
 print(X.shape)
 print(y.shape)
@@ -62,11 +83,13 @@ print(y.shape)
 # -
 
 
-torch.save(X, 'X.pt')
-torch.save(y, 'y.pt')
+torch.save(X, 'assets/X.pt')
+torch.save(y, 'assets/y.pt')
 
-X = torch.load('X.pt')
-y = torch.load('y.pt')
+X = torch.load('assets/X.pt')
+y = torch.load('assets/y.pt')
+
+# ### Normalize the input across each window-sized sequence
 
 # +
 X_mean = torch.mean(X, dim=1).unsqueeze(1)
@@ -78,7 +101,9 @@ y = (y - X_mean[:,:,3]) / X_std[:,:,3]
 print(X.shape)
 print(y.shape)
 plt.plot(X[0])
-print(y)
+# -
+
+# ### Remove all inputs and corresponding outputs that containt NaN's
 
 # +
 print("old:")
@@ -98,30 +123,30 @@ print(X.shape)
 print(y.shape)
 # -
 
-print(X.shape)
-print(y.shape)
+# ### Split data into training and validation sets
 
 # +
 N, S, D = X.shape
 perm = np.random.permutation(N)
 num_train = int(0.99*N)
-num_val = N - num_train
 
-X_train = X[perm[0:num_train],:,:]
-y_train = y[perm[0:num_train]]
-X_val = X[perm[num_train:],:,:]
-y_val = y[perm[num_train:]]
+train_selector = perm[0:num_train]
+val_selector = perm[num_train:]
+
+X_train = X[train_selector]
+y_train = y[train_selector]
+X_val = X[val_selector]
+y_val = y[val_selector]
+
+print("X_train shape: ", X_train.shape)
+print("y_train shape: ", y_train.shape)
+print("X_val shape: ", X_val.shape)
+print("y_val shape: ", y_val.shape)
+
+
 # -
 
-print(X_train.shape)
-print(y_train.shape)
-print(X_val.shape)
-print(y_val.shape)
-
-import torch.optim
-import torch.nn as nn
-import torch.nn.functional as F
-
+# ### Training a RNN
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, X, Y):
@@ -134,8 +159,6 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, index):
         return self.X[index], self.Y[index]
 
-
-from torch.utils.data import DataLoader
 
 batch_size = 32
 dataset = Dataset(X_train, y_train)
@@ -178,22 +201,18 @@ val_losses = []
 epoch = 0
 
 t0 = time.time()
-num_epochs = 5
+num_epochs = 3
 for ep in range(num_epochs):
     tstart = time.time()
     for i, data in enumerate(loader):
         print(i, end='\r')
         optimizer.zero_grad()
-#         print("optimizer.zero_grad()")
         outputs = model(data[0])
-#         print("outputs = model(data[0])")
         loss = criterion(outputs, data[1])
-#         print("loss = criterion(outputs, data[1])")
         loss.backward()
-#         print("loss.backward()")
         optimizer.step()
-#         print("optimizer.step()")
-        if i%100==0:
+    
+        if i % 100==0:
             train_losses.append(loss.item())
             pXval = model(X_val)
             vloss = criterion(pXval, y_val)
@@ -214,7 +233,11 @@ for ep in range(num_epochs):
 time_total = time.time() - t0
 print('Total time: {:4.3f}, average time per epoch: {:4.3f}'.format(time_total, time_total / num_epochs))
 
-torch.save(model, 'model.pt')
+torch.save(model, 'assets/model.pt')
+
+# ### Model evaluation
+
+model = torch.load('assets/model.pt')
 
 t_losses = [i for i in train_losses if i < 4000]
 plt.plot(t_losses)
@@ -227,5 +250,115 @@ plt.legend(['train', 'val'])
 
 model.eval()
 
+pred = model(X_val)
+print(criterion(pred, y_val))
+
+# ### Model predictions compared to standard deviations
+
 # +
-# 
+pred = model(X_val)
+
+plt.plot((pred - y_val).detach()[1000:1100])
+plt.title('std difference')
+# -
+
+# ### Model predictions compared to actual price
+
+# +
+pred_abs = pred * X_std[val_selector][:,:,3] + X_mean[val_selector][:,:,3]
+y_val_abs = y_val * X_std[val_selector][:,:,3] + X_mean[val_selector][:,:,3]
+
+plt.plot((pred_abs - y_val_abs).detach()[1000:1100])
+plt.title('absolute price difference')
+# -
+
+# ### Testing and visualizing random stock in test data
+
+# +
+val_names_and_dates = np.array(name_and_date)[val_selector]
+
+stock = "AUTO";
+stock_selector = torch.tensor(val_names_and_dates[:,0] == (stock + ".txt"))
+
+s_pred_abs = pred_abs[stock_selector]
+s_y_val_abs = y_val_abs[stock_selector]
+
+stock_dates = val_names_and_dates[stock_selector][:,1]
+# -
+
+stock_dates.sort()
+fig, ax = plt.subplots()
+ax.plot(stock_dates[10:20], s_pred_abs.detach()[10:20])
+ax.plot(stock_dates[10:20], s_y_val_abs.detach()[10:20])
+fig.autofmt_xdate()
+start, end = ax.get_xlim()
+plt.show()
+
+# ### Testing random unseen stock (skipped over in the data loading stage)
+
+# +
+seq = []
+test_y = []
+test_name_and_date = []
+window_size = 122
+
+with open(root_path + "AAPL.txt") as f:
+    data = json.load(f)
+
+    temp1 = [] # for prices
+    temp2 = [] # for name and date
+
+    for k, v in data.items():
+        temp1.append(torch.tensor([ float(i[1]) for i in v.items() if i[0] != "5. volume" ]).unsqueeze(0))
+        temp2.append(k)
+
+    # reverse so that data is increasing in time
+    temp1.reverse()
+    temp2.reverse()
+
+    prices = torch.cat(temp1, 0)
+
+    for i in range(len(prices) - window_size - 1):
+        seq.append(prices[i:i+window_size].unsqueeze(0))
+        test_y.append(prices[i+window_size][3].item()) # predict the closing price
+        test_name_and_date.append(['AAPL', temp2[i + window_size + 1]])
+        
+test_X = torch.cat(seq, 0)
+test_y = torch.tensor(test_y).unsqueeze(1) # from (N,) to (N,1)
+
+test_X_mean = torch.mean(test_X, dim=1).unsqueeze(1)
+test_X_std = torch.std(test_X, dim=1).unsqueeze(1)
+
+test_X = (test_X - test_X_mean) / test_X_std
+test_y = (test_y - test_X_mean[:,:,3]) / test_X_std[:,:,3]
+
+test_pred = model(test_X)
+print(criterion(test_pred, test_y))
+
+test_pred = test_pred * test_X_std[:,:,3] + test_X_mean[:,:,3]
+test_y = test_y * test_X_std[:,:,3] + test_X_mean[:,:,3]
+
+plt.plot(test_pred.detach()[3000:3100])
+plt.plot(test_y[3000:3100])
+# -
+
+dates = [i[1] for i in test_name_and_date]
+print(dates)
+temp_pred = [ i.data[0] for i in test_pred.detach().numpy() ]
+temp_y = [ i.data[0] for i in test_y.detach().numpy() ]
+
+# +
+import matplotlib.ticker as mticker
+
+fig, ax = plt.subplots()
+ax.plot(dates[1000:1010], temp_pred[1000:1010])
+fig.autofmt_xdate()
+start, end = ax.get_xlim()
+plt.show()
+# -
+
+fig, ax = plt.subplots()
+ax.plot(dates[1000:1010], temp_y[1000:1010])
+fig.autofmt_xdate()
+start, end = ax.get_xlim()
+plt.show()

@@ -1,0 +1,6 @@
+Mistakes:
+- didn't normalize
+- sequenced before separating into training and validation so training and validation data were very similar
+- NaN's from normalizing
+- Bad values in the volume category
+- Data too big, had to vectorize and cut down on torch operations

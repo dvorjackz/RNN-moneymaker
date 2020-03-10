@@ -1,4 +1,6 @@
 *~
 .env/
 .vscode/
-scrape/data/
+scrape/data
+scrape/data.tar.gz
+assets/
