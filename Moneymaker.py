@@ -45,7 +45,7 @@ for i, filename in enumerate(all_files):
     if i % 3 == 0:
     
         len_stocks = len(all_files)
-        print("Loading stock {}/{} ({})".format(i + 1, len_stocks, filename), end='\r')
+        print("Loading stock {}/{} ({})   ".format(i + 1, len_stocks, filename), end='\r')
         
         with open(root_path + filename) as f:
             if not filename.startswith('.'):
@@ -63,15 +63,8 @@ for i, filename in enumerate(all_files):
                 raw_data[filename.split('.')[0]] = (prices, dates)
 
 print("")
-print(len(raw_data))
-print(y.shape)
+print("Total number of stocks: " + str(len(raw_data)))
 
-
-# -
-
-
-from datetime import date
-print((datetime.strptime("2018-03-02", "%Y-%m-%d") - datetime.strptime("2018-03-01", "%Y-%m-%d")).days)
 
 # +
 X_train = []
@@ -86,7 +79,7 @@ for i, items in enumerate(raw_data.items()):
     print("({}/{})".format(i, len(raw_data.items())), end="\r")
     k, v = items
     prices, _ = v
-    if len(prices) < window_size:
+    if len(prices) < window_size + 1:
         continue
     
     prices = torch.tensor(prices).float()
@@ -111,12 +104,14 @@ y_train = torch.tensor(y_train).unsqueeze(1)
 X_val = torch.cat(X_val)
 y_val = torch.tensor(y_val).unsqueeze(1)
 print("Done")
-# -
 
-print(X_train.shape)
-print(X_val.shape)
-print(y_train.shape)
-print(y_val.shape)
+# +
+print("X_train shape: \t", X_train.shape)
+print("X_val shape: \t", X_val.shape)
+print("y_train shape: \t", y_train.shape)
+print("y_val shape: \t", y_val.shape)
+
+# false means that something is wrong
 print(plen == X_train.shape[0] + X_val.shape[0])
 
 
@@ -141,15 +136,15 @@ print(plen == X_train.shape[0] + X_val.shape[0])
 # ### Training a RNN
 
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self, X, Y):
+    def __init__(self, X, y):
         self.X = X
-        self.Y = Y
+        self.y = y
     
     def __len__(self):
         return len(self.X)
     
     def __getitem__(self, index):
-        return self.X[index], self.Y[index]
+        return self.X[index], self.y[index]
 
 
 batch_size = 32
@@ -192,6 +187,8 @@ train_losses = []
 val_losses = []
 epoch = 0
 
+# ### Load a pre-existing model for further training or prediction
+
 # +
 model = RNNClassifier(input_dim, hidden_dim, output_dim)
 optimizer = torch.optim.Adam(model.parameters())
@@ -203,14 +200,16 @@ epoch = checkpoint['epoch']
 loss = checkpoint['loss']
 
 model.train()
+# -
 
-# +
+# ### Train the model
+
 t0 = time.time()
 num_epochs = 3
 for ep in range(num_epochs):
     tstart = time.time()
     for i, data in enumerate(loader):
-        print(i, end='\r')
+        print("{}/{}".format(i, X_train.shape[0]), end='\r')
         optimizer.zero_grad()
         outputs = model(data[0])
         loss = criterion(outputs, data[1])
@@ -218,33 +217,33 @@ for ep in range(num_epochs):
         optimizer.step()
     
         if i % 1000==0:
-            train_losses.append(loss.item())
-            pXval = model(X_val)
-            vloss = criterion(pXval, y_val)
-            val_losses.append(vloss.item())
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': loss,
-            }, 'assets/partial_model.pt')
+            with torch.no_grad():
+                model.eval()
+                train_losses.append(loss.item())
+                pXval = model(X_val)
+                vloss = criterion(pXval, y_val)
+                val_losses.append(vloss.item())
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss': loss,
+                }, 'assets/partial_model.pt')
 
-            print("training loss: {:<3.3f} \t val loss: {:<3.3f}".format(loss, vloss))
-    
-#     ptrain = model(X_train)
-#     tloss = criterion(ptrain, y_train)
-#     train_losses.append(tloss.item())
-    
-    pXval = model(X_val)
-    vloss = criterion(pXval, y_val)
-    val_losses.append(vloss.item())
-    epoch += 1    
-    tend = time.time()
-    print('epoch: {:<3d} \t time: {:<3.2f} \t val loss: {:<3.3f}'.format(epoch, 
-            tend - tstart, vloss.item()))
+                print("training loss: {:<3.3f} \t val loss: {:<3.3f}".format(loss, vloss))
+                model.train()
+
+    with torch.no_grad():
+        model.eval()
+        pXval = model(X_val)
+        vloss = criterion(pXval, y_val)
+        val_losses.append(vloss.item())
+        epoch += 1    
+        tend = time.time()
+        print('epoch: {:<3d} \t time: {:<3.2f} \t val loss: {:<3.3f}'.format(epoch, 
+                tend - tstart, vloss.item()))
 time_total = time.time() - t0
 print('Total time: {:4.3f}, average time per epoch: {:4.3f}'.format(time_total, time_total / num_epochs))
-# -
 
 torch.save(model, 'assets/model.pt')
 
