@@ -1,4 +1,3 @@
 # RNN-moneymaker
 
-How to get rich with recurrent neural networks! 
-
+How to get rich with recurrent neural networks!
